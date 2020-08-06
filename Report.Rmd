@@ -1,0 +1,291 @@
+---
+title: "Stat 333 Final Report"
+author: "Prithvi Tanna"
+date: "5/13/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message = FALSE,warning = FALSE)
+```
+
+##Introduction
+
+What are the characteristics of a positive or negative Yelp review? Throughout our project, this is what we set out to identify. Yelp is an online platform where reviewers can rate a restaurant from one to five stars based on their experience. Along with their ratings, reviewers can also write about their experience at the restaurant, giving their justification for the rating they are giving. Other users can tap on the “cool”,”funny”, or “useful” buttons to display their reactions to a review. There are many aspects of a yelp review that can be helpful in predicting star rating.We explored the review text,categories,sentiment scores, and length of over 55,000 yelp reviews in the Madison area to determine relevant predictors. Throughout this project, our process was to identify predictors that were present in positive and negative yelp reviews and utilize these predictors to create a model that could accurately predict the rating of a yelp review. After finalizing our model, we checked model assumptions and identified areas of improvement.
+
+##Identifying Predictors
+
+After receiving a dataset with over 55,000 yelp reviews, our first step was to perform some exploratory data analysis. First, we created a histogram to display the distribution of the number of words and number of characters of our yelp reviews. Both of these distributions were skewed to the right. However, the log transformation of number of words and number of characters both yielded approximately normal distributions. Additionally, we created four bar plots exploring the relationships between star rating and mean useful votes, mean funny votes, mean cool votes, and mean sentiment score2. Each mean vote amount was grouped by star rating. The graphs indicate that there is an upward trend in mean cool votes and sentiment score as the star rating increases. The opposite is true for mean useful and funny votes as these means decrease as star rating increases. In fact, the mean sentiment score for one star reviews is negative. With there being a clear trend for all four of these variables, we believed it was a good idea to include them in our model.We also  did some simple data preprocessing where we converted the text, category, and city variables to character variables.
+
+```{r,out.width= '50%'}
+yelp <- read.csv("Yelp_train.csv")
+yelp_test <- read.csv("Yelp_test.csv")
+yelp_validate <- read.csv("Yelp_validate.csv")
+yelp_out <- rbind(yelp_test,yelp_validate)
+# convert text into actual strings
+yelp$text <- as.character(yelp$text)
+yelp_out$text <- as.character(yelp_out$text)
+yelp$categories <- as.character(yelp$categories)
+yelp_out$categories <- as.character(yelp_out$categories)
+
+# Refactorize yelp_out city after binding validation and test data
+yelp_out$city <- as.character(yelp_out$city)
+yelp_out$city <- factor(yelp_out$city)
+
+# Fix date variable into actual dates
+yelp$date <- as.Date(yelp$date)
+yelp_out$date <- as.Date(yelp_out$date)
+
+# function to split categories string at commas, and
+# sanitize/standardize the names (remove special characters) so they can be turned into column names
+split_sanitize = function(x){sub("-$","",gsub("\\W+","-",strsplit(x,", ")[[1]]))}
+
+split_sanitize2 = function(x){sub("-$","",gsub("\\W+","-",strsplit(x,", ")))}
+
+
+categories <- yelp$categories
+
+function_flag = function(x){
+  y <- unique(split_sanitize(toString(categories)))
+  x$categories <- split_sanitize2(x$categories)
+  for (i in y){
+      z <- paste0("cat-",i)
+      x[[z]] <- grepl(i,x$categories,fixed = TRUE)
+  }
+  return (x)
+}
+
+yelp <- function_flag(yelp)
+
+yelp_out <- function_flag(yelp_out) ##Adding category flag variables to yelp dataset
+
+par(mfrow=c(2,2))
+hist(yelp$nchar, breaks=10000,main="Distribution of variable nchar",xlab="Number of Characters",ylab="Frequency")
+hist(yelp$nword, breaks=10000,main="Distribution of variable nword",xlab="Number of Words",ylab="Frequency")
+hist(log(yelp$nword),breaks=10000,main="Distribution of log(nword)",xlab="Log Number of Words",ylab="Frequency")
+hist(log(yelp$nchar),breaks=10000,main="Distribution of log(nchar)",xlab="Log Number of Characters",ylab="Frequency")
+
+
+par(mfrow = c(2,2))
+library(dplyr,warn.conflicts = FALSE)
+   coolgroup <- yelp %>%
+    group_by(stars) %>%
+    summarise(mean_cool = mean(cool)) ##groups mean cool rating by stars
+  
+   barplot(coolgroup$mean_cool,names.arg = 1:5, xlab = "Star Rating", ylab = "Mean cool votes", col = c("red"), main =  "Star Rating vs Mean Cool Votes")
+
+  funnygroup <- yelp %>%
+    group_by(stars) %>%
+    summarize(mean_funny = mean(funny))
+  
+  
+  ##groups mean funny rating by stars
+barplot(funnygroup$mean_funny,names.arg = 1:5, xlab = "Star Rating", ylab = "Mean funny votes", col = c("blue"),   main = "Star Rating vs Mean Funny Votes")
+  
+usefulgroup <- yelp %>% 
+    group_by(stars) %>%
+    summarize(mean_useful = mean(useful)) ##groups mean useful rating by stars
+
+barplot(usefulgroup$mean_useful,names.arg = 1:5, xlab = "Star Rating", ylab = "Mean useful votes", main = "Star Rating vs Mean Useful Votes", col = c("green"))
+   
+meanscore <- rep(0,5)
+names(meanscore) <- 1:5
+for (i in 1:5) meanscore[i] <- mean(yelp$sentiment[yelp$stars==i])
+barplot(meanscore, xlab='Stars', ylab="Average sentiment score", main = "Star Rating vs Mean Sentiment Score", col = c("purple"))
+  
+```
+
+\newpage
+
+In order to improve upon the benchmark model, we needed to extract more words from the review text. Through text mining packages like tidytext and data manipulation packages like dplyr, we were able to extract and count the frequency of every single word from the review text. However, not every word is useful in predicting yelp star rating. Using common sense, we assumed that words such as I, and, the, me, etc. would not help predict star rating. In order to filter out words like these and only include positive and negative words in the model, we used the sentiments dataset from tidytext. This dataset includes a vast number of words with positive and negative connotations. Using an inner join command, we were able to find all words with positive and negative connotations based on the sentiments dataset. After this step, we filtered out any words that appeared less than twenty times in the review text. This allowed us to efficiently extract positive and negative words without going over the three thousand predictor limit. We also filtered out words that were already in the dataset to avoid duplicates.
+
+Our next step was to find two word phrases that could help predict star rating. Many times, a two word phrase can add much more context as to what a reviewer is saying. For example, if we were only looking for single words, one would think that a reviewer including the word good means that they will give a high star rating. However, if the word good is preceded by not, then the phrase “not good” completely changes what the reviewer means. Our first step in finding two word phrases was to extract and count the frequency of every two word phrase in the review text using tidytext. In word one of the two word phrases, we were looking for negation words such as not,don’t,wasn’t, and never. After filtering out all non negation words in word one, we filtered out all stop words (and,the,but,a etc.)  in word two in order to extract meaningful phrases. After this, we filtered out all two word phrases that appeared less than twenty times in the review text in order to keep our predictor count lower than three thousand.
+
+Using a similar rationale, we found three word phrases to add as predictors. We first extracted and counted all three word phrases in the review text. We then filtered out any words that were not negation words in word one and filtered out all stop words in word three. In general, we were looking for phrases like “not very good” or “not as good”. The overall meaning of these phrases cannot be extracted from two word phrases. After finding all of our phrases, we filtered out any phrase that appeared less than twenty times in the review text. We also visualized the relationship between the average count of the most frequent words and phrases we extracted and star rating through bar plots. There seems to be a clear trend for most of the words and phrases plotted. For example, the word "good" rises from 1 to 3 stars, peaks at 3 stars, and then declines from 4-5 stars. The word "great" follows a different trend as the average word count rises as the number of stars increases, with the peak being at five stars. Phrases like "won't be back" or "not good" have realtively high average word counts for one and two star reviews. However, the average word count sharply decreases for these words when looking at three,four, and five star reviews.
+
+```{r}
+library(tidytext,warn.conflicts = FALSE)
+library(tm,warn.conflicts = FALSE)
+library(stringr,warn.conflicts = FALSE)
+
+yelp_text_tbl <- tbl_df(data.frame(uniqueID = 1:nrow(yelp),yelp))
+yelp_text_tbl$text <- as.character(yelp_text_tbl$text)
+
+
+yelp_words <- yelp_text_tbl %>% ##extracts every word
+  select(uniqueID,stars,text) %>%
+  unnest_tokens(word, text) %>%
+  filter(str_detect(word, "^[a-z']+$"))
+
+counted_words <- yelp_words %>% ##counts words
+  count(word) 
+
+varwords <- colnames(yelp)[13:212] ##words already in model
+
+filtered_words <- counted_words %>% 
+  filter(n > 20, !word %in% varwords)
+
+sentiment_words <- filtered_words %>% ##Finds positive and negative words
+  inner_join(sentiments)
+
+```
+
+```{r}
+library(tidyverse,warn.conflicts = FALSE)
+yelp_phrase <- yelp_text_tbl %>% ##extracts every two word phrase
+  select(uniqueID,stars,text) %>%
+  unnest_tokens(two_words,text,token = "ngrams",n=2)
+
+yelp_phrase_count <- yelp_phrase %>%
+  count(two_words, sort = TRUE) %>%
+  separate(two_words, c("word1","word2"),sep = " ") %>%
+  filter(word1 == "not"|word1 == "no"| word1 == "never" |word1 == "didn't"| word1 == "don't"| word1 == "won't"| word1 == "isn't"| word1 == "wasn't" | word1 == "can't"| word1 == "cannot"| word1 == "wouldn't"| word1 == "couldn't"| word1 == "weren't"| word1 == "aren't"|word1 == "doesn't",word2 == "good"| word2 == "great"| word2 == "like"| word2 == "best"| !word2 %in% stop_words$word)
+
+yelp_phrase_count_filtered <- yelp_phrase_count %>%
+  filter(n > 20) %>%
+  unite(two_words,word1,word2,sep = " ")
+
+```
+
+```{r}
+yelp_phrase_3 <- yelp_text_tbl %>% ##extracts every three word phrase
+  select(uniqueID,stars,text) %>%
+  unnest_tokens(three_words,text,token = "ngrams",n=3)
+
+yelp_phrase_count_3 <- yelp_phrase_3 %>%
+  count(three_words, sort = TRUE) %>%
+  separate(three_words, c("word1","word2","word3"),sep = " ") %>%
+  filter(word1 == "not"|word1 == "never"|word1 == "wasn't"| word1 == "isn't"|word1 == "can't"|word1 == "no"|word1 == "cannot"| word1 == "won't"|word1 == "didn't"| word1 == "don't"|word1 == "haven't"|word1 == "couldn't",word3 == "good"| word3 == "great"| word3 == "like"|word3 == "best"|word3 == "greatest"|word3 == "back"|!word3 %in% stop_words$word)
+
+
+yelp_phrase_count_filtered_3 <- yelp_phrase_count_3 %>%
+  filter(n > 20) %>%
+  unite(three_words,word1,word2,word3,sep = " ")
+
+```
+```{r}
+words <- c(sentiment_words$word,yelp_phrase_count_filtered$two_words,yelp_phrase_count_filtered_3$three_words) ##words that are not in model
+new_X <- matrix(0, nrow(yelp), length(words))
+new_x_out <- matrix(0,nrow(yelp_out),length(words))
+# testing if a specific word count is associated with star rating
+new_pvals <- rep(0,length(words))
+names(new_pvals) <- words
+for (i in 1:length(words)){
+  new_X[,i] <- str_count(yelp$text, regex(words[i], ignore_case=T))
+  new_x_out[,i] <- str_count(yelp_out$text, regex(words[i], ignore_case=T))# ignore the upper/lower case in the text
+}
+
+# testing if a specific word count is associated with star rating
+new_pvals <- rep(0,length(words))
+names(new_pvals) <- words
+
+set.seed(123)
+
+for (i in 1:length(words)){
+  ctable <- table(yelp$stars, new_X[,i])
+  new_pvals[i] <- fisher.test(ctable, simulate.p.value = T)$p.value
+}
+
+
+
+colnames(new_X) = names(new_pvals)
+colnames(new_x_out) = names(new_pvals)
+
+sigwords <- names(new_pvals[new_pvals < .05])
+sigindex <- which(new_pvals < .05, arr.ind = TRUE) ##filtering out insignificant p-values
+
+colnames(yelp_out)[6] = "cool1"
+colnames(yelp)[7] = "cool1"
+
+colnames(yelp_out)[4] = "useful1"
+colnames(yelp)[5] = "useful1"
+
+yelp_words <- cbind(yelp,new_X[,sigindex])
+yelp_out_words <- cbind(yelp_out,new_x_out[,sigindex])##new dataframe with additional predictors
+
+addwords <- function(x,y){
+for (i in y){ ##adding words to model
+  x[[i]] <- str_count(tolower(x$text),i)
+}
+  return(x)
+}
+
+
+yelp2 <- yelp_words
+
+yelp_out2 <- yelp_out_words
+
+word.yelp <- colnames(yelp_words)[c(13:212,468:1592)]
+
+word.yelpout <- colnames(yelp_out_words)[c(12:211,467:1591)]
+
+
+for (i in word.yelp){ ##converting all words into categorical variables TRUE if word appears, false if not
+  yelp2[[i]] <- yelp2[[i]] > 0
+}
+
+for(i in word.yelpout){
+  yelp_out2[[i]] <- yelp_out2[[i]] > 0
+}
+```
+
+```{r,out.width= '75%'}
+plotWordStar <- function(stars, wordcount, wordname){
+  meancount <- rep(0,5)
+  names(meancount) <- 1:5
+  for (i in 1:5)    meancount[i] <- mean(wordcount[stars==i])
+  barplot(meancount, main=wordname, xlab="Stars", ylab="Average word count")
+}
+
+
+graphwords <- sentiment_words %>%
+       arrange(desc(n)) %>%
+       head(n = 4)
+
+graphwords <- c(graphwords, yelp_phrase_count_filtered %>%
+                  arrange(desc(n)) %>%
+                  head(n = 4))
+
+graphwords <- c(graphwords,yelp_phrase_count_filtered_3 %>%
+              arrange(desc(n)) %>%
+              head(n = 4) %>%
+              select(three_words))
+words2 <- c(graphwords$word,graphwords$two_words,graphwords$three_words)
+
+par(mfrow=c(3,4))
+for (i in 1:12){
+  plotWordStar(yelp$stars,new_X[,words2[i]], words2[i])
+}
+
+```
+
+Additionally, we extracted binary category predictors based on the variable “category” in our original yelp dataset. We first found every single category of the restaurant in our dataset. We then constructed our binary variables for each category. The variable took the value of one (or true) if a restaurant is of the specific category and a zero (or false) otherwise.
+
+Before creating a model with all the predictors from our original dataset along with the new predictors we had extracted, we did some additional testing and transformations. For every single word and phrase, we tested whether the count of a specific word or phrase in a review is associated with star rating using a simulated fisher’s test. We filtered out all words and phrases that had p-values above 0.05. Additionally, we performed a log transformation on the variables “nword” and “nchar”. As mentioned earlier, this normalizes the  distributions of “nword” and “nchar” allowing for better prediction. Another transformation performed was to transform all word and phrase predictors into indicator variables. These predictors would be one (or true) if the word or phrase appeared in a specific review and zero (or false) if it did not. We found that the actual presence of the word or phrase in a review had more predictive power than the number of times the word or phrase appeared in a review, as our $R^2$ increased from 0.6196 to 0.6324 when this transformation was applied.
+
+###Model and Diagnostics
+
+After finally extracting all of our predictors, we were able to implement our model. Using all of our predictors, we created a multiple linear regression model. We picked this model because it allowed for many predictors and was simple to check diagnostics for. The total number of predictors in our model was 1562 and the degrees of freedom was 53779. The $R^2$ value of the model was 0.6324, meaning that 63.24 percent of the variation in the model is due to the linear relationship between star rating and the predictors. The adjusted R^2, or the R^2 value adjusted for the number of predictors in the model, is 0.6218. The in-sample RMSE, a value used to determine how far predicted rating deviates from the true rating, of our model on the training data was 0.7904. For out of sample predictions, our RMSE was 0.79416 for the validation data and 0.80422 for the testing data. However, the out of sample predictions were adjusted so that all predictions fell between one and five stars. Additionally, the MSE of the model was 0.6248.
+
+Given the model above, we check the model assumptions based on the diagnostic plots of the model. First, for linearity, we can look at the graph of Residuals vs Fitted. Although there is a  downward curve to the red line for fitted values greater than five stars, it seems reasonable overall. There is a pattern in the residuals of five distinct lines, but this is due to the fact that our response variable has five discrete levels. Second, we can check that the normality assumption is met through the normal QQ plot, where the points are basically fit on the straight diagonal line. Third, we can check homoscedasticity through the scale-location plot, where the line is relatively straight so we can assume that this assumption is also held. Fourth, for any outliers, we can just check through the Cook’s distance graph, we can clearly see that there are no significant outliers as none of the observations have a Cook’s distance that exceeds one. However, the point 17107 seems to be an outlier based on the residual plot. 
+
+```{r}
+dat <- yelp2[,-c(1,3:4,8,12)]      
+dat$nword <- log(dat$nword)
+dat$nchar <- log(dat$nchar)
+benchmark <- lm(stars~., data=dat)
+par(mfrow = c(2,3))
+plot(benchmark,which = 1)
+plot(benchmark,which = 2)
+plot(benchmark,which = 3)
+plot(benchmark,which = 4)
+plot(benchmark,which = 5)
+```
+
+A weakness of our model is that we are using a linear model to predict a response variable with five discrete levels. As a result, some of our predictions were outside of the range of one to five stars. We corrected this by changing all predictions below one star to one star and all predictions above five stars to five stars. Additionally, we decided not to remove any outliers. This could be a viable option based on additional domain knowledge, but we did not feel comfortable removing any data points. Another weakness of the model is potential collinearity among predictors. Because there are so many words with similar meanings and connotations, it was difficult to account for collinearity especially when we included two word phrases like “not good” while also including one word phrases like “good”. We could have also found additional ways to narrow down our model as we included 1562 predictors in our multiple linear regression model, which may have been too many.
+
+##Takeaways and Conclusion
+
+Overall, we believed our model performed well despite its weaknesses. We were able to efficiently add a multitude of predictors without overwhelming our computer memory by filtering out words based on their importance to star rating and frequency. We figured out ways to transform our predictors to improve model performance. Additionally, we were able to find two or three word phrases that also increased the predictive power of the model. In the future, we would take more time to explore non linear models and the effects of collinearity to make our model even better.
+
+

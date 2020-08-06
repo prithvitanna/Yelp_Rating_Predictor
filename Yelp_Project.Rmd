@@ -1,0 +1,388 @@
+---
+title: "Stat 333 Final Project"
+author: "Prithvi Tanna"
+date: "3/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+###Reading in Data/ Background
+
+```{r}
+yelp <- read.csv("Yelp_train.csv")
+yelp_test <- read.csv("Yelp_test.csv")
+yelp_validate <- read.csv("Yelp_validate.csv")
+yelp_out <- rbind(yelp_test,yelp_validate)
+str(yelp[,1:15])
+view_vars <- c("Id","stars","nchar","nword","text")
+# The first 3 reviews
+yelp[1:3,view_vars]
+yelp[sample(which(yelp$stars == 1),3), view_vars]
+# randomly view 3 Five star reviews
+yelp[sample(which(yelp$stars == 5),3), view_vars]
+```
+
+
+##Cleaning/Processing
+
+```{r}
+
+# convert text into actual strings
+yelp$text <- as.character(yelp$text)
+yelp_out$text <- as.character(yelp_out$text)
+yelp$categories <- as.character(yelp$categories)
+yelp_out$categories <- as.character(yelp_out$categories)
+
+# Refactorize yelp_out city after binding validation and test data
+yelp_out$city <- as.character(yelp_out$city)
+yelp_out$city <- factor(yelp_out$city)
+
+# Fix date variable into actual dates
+yelp$date <- as.Date(yelp$date)
+yelp_out$date <- as.Date(yelp_out$date)
+
+# function to split categories string at commas, and
+# sanitize/standardize the names (remove special characters) so they can be turned into column names
+split_sanitize = function(x){sub("-$","",gsub("\\W+","-",strsplit(x,", ")[[1]]))}
+
+split_sanitize2 = function(x){sub("-$","",gsub("\\W+","-",strsplit(x,", ")))}
+
+
+categories <- yelp$categories
+
+function_flag = function(x){
+  y <- unique(split_sanitize(toString(categories)))
+  x$categories <- split_sanitize2(x$categories)
+  for (i in y){
+      z <- paste0("cat-",i)
+      x[[z]] <- grepl(i,x$categories,fixed = TRUE)
+  }
+  return (x)
+}
+
+yelp <- function_flag(yelp)
+
+yelp_out <- function_flag(yelp_out) ##Adding category flag variables to yelp dataset
+```
+
+##Visualization
+
+```{r}
+library(ggplot2)
+par(mfrow = c(,2))
+barplot(table(yelp$stars),main="Distribution of stars",xlab="Stars",ylab="Frequency")
+hist(yelp$nchar, breaks=10000,main="Distribution of variable nchar",xlab="Number of Characters",ylab="Frequency")
+hist(yelp$nword, breaks=10000,main="Distribution of variable nword",xlab="Number of Words",ylab="Frequency")
+hist(yelp$useful, breaks=10000,main="Distribution of variable useful",xlab="Number of votes for useful",ylab="Frequency")
+hist(yelp$funny, breaks=10000,main="Distribution of variable funny",xlab="Number of votes for funny",ylab="Frequency")
+hist(yelp$cool, breaks=10000,main="Distribution of variable cool",xlab="Number of votes for cool",ylab="Frequency")
+
+```
+
+##Log Transformation of nword and nchar
+
+```{r}
+par(mfrow=c(2,2))
+hist(yelp$nchar, breaks=10000,main="Distribution of variable nchar",xlab="Number of Characters",ylab="Frequency")
+hist(yelp$nword, breaks=10000,main="Distribution of variable nword",xlab="Number of Words",ylab="Frequency")
+hist(log(yelp$nword),breaks=10000,main="Distribution of log(nword)",xlab="Log Number of Words",ylab="Frequency")
+hist(log(yelp$nchar),breaks=10000,main="Distribution of log(nchar)",xlab="Log Number of Characters",ylab="Frequency")
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+
+library(dplyr)
+   coolgroup <- yelp %>%
+    group_by(stars) %>%
+    summarise(mean_cool = mean(cool)) ##groups mean cool rating by stars
+  
+   barplot(coolgroup$mean_cool,names.arg = 1:5, xlab = "Star Rating", ylab = "Mean cool votes", col = c("red"), main =  "Star Rating vs Mean Cool Votes")
+
+  funnygroup <- yelp %>%
+    group_by(stars) %>%
+    summarize(mean_funny = mean(funny))
+  
+  
+  ##groups mean funny rating by stars
+barplot(funnygroup$mean_funny,names.arg = 1:5, xlab = "Star Rating", ylab = "Mean funny votes", col = c("blue"),   main = "Star Rating vs Mean Funny Votes")
+  
+usefulgroup <- yelp %>% 
+    group_by(stars) %>%
+    summarize(mean_useful = mean(useful)) ##groups mean useful rating by stars
+
+barplot(usefulgroup$mean_useful,names.arg = 1:5, xlab = "Star Rating", ylab = "Mean useful votes", main = "Star Rating vs Mean Useful Votes", col = c("green"))
+   
+meanscore <- rep(0,5)
+names(meanscore) <- 1:5
+for (i in 1:5) meanscore[i] <- mean(yelp$sentiment[yelp$stars==i])
+barplot(meanscore, xlab='Stars', ylab="Average sentiment score", main = "Star Rating vs Mean Sentiment Score", col = c("purple"))
+  
+```
+
+
+##Extracting Word Predictors
+
+```{r}
+library(tidytext)
+library(tm)
+library(stringr)
+
+yelp_text_tbl <- tbl_df(data.frame(uniqueID = 1:nrow(yelp),yelp))
+yelp_text_tbl$text <- as.character(yelp_text_tbl$text)
+
+
+yelp_words <- yelp_text_tbl %>% ##extracts every word
+  select(uniqueID,stars,text) %>%
+  unnest_tokens(word, text) %>%
+  filter(str_detect(word, "^[a-z']+$"))
+
+counted_words <- yelp_words %>% ##counts words
+  count(word) 
+
+varwords <- colnames(yelp)[13:212] ##words already in model
+
+filtered_words <- counted_words %>% 
+  filter(n > 20, !word %in% varwords)
+
+sentiment_words <- filtered_words %>% ##Finds positive and negative words
+  inner_join(sentiments)
+
+```
+
+
+
+##Extracting Phrases
+
+```{r}
+library(tidyverse)
+yelp_phrase <- yelp_text_tbl %>% ##extracts every two word phrase
+  select(uniqueID,stars,text) %>%
+  unnest_tokens(two_words,text,token = "ngrams",n=2)
+
+yelp_phrase_count <- yelp_phrase %>%
+  count(two_words, sort = TRUE) %>%
+  separate(two_words, c("word1","word2"),sep = " ") %>%
+  filter(word1 == "not"|word1 == "no"| word1 == "never" |word1 == "didn't"| word1 == "don't"| word1 == "won't"| word1 == "isn't"| word1 == "wasn't" | word1 == "can't"| word1 == "cannot"| word1 == "wouldn't"| word1 == "couldn't"| word1 == "weren't"| word1 == "aren't"|word1 == "doesn't",word2 == "good"| word2 == "great"| word2 == "like"| word2 == "best"| !word2 %in% stop_words$word)
+
+yelp_phrase_count_filtered <- yelp_phrase_count %>%
+  filter(n > 20) %>%
+  unite(two_words,word1,word2,sep = " ")
+
+```
+
+
+
+```{r}
+yelp_phrase_3 <- yelp_text_tbl %>% ##extracts every three word phrase
+  select(uniqueID,stars,text) %>%
+  unnest_tokens(three_words,text,token = "ngrams",n=3)
+
+yelp_phrase_count_3 <- yelp_phrase_3 %>%
+  count(three_words, sort = TRUE) %>%
+  separate(three_words, c("word1","word2","word3"),sep = " ") %>%
+  filter(word1 == "not"|word1 == "never"|word1 == "wasn't"| word1 == "isn't"|word1 == "can't"|word1 == "no"|word1 == "cannot"| word1 == "won't"|word1 == "didn't"| word1 == "don't"|word1 == "haven't"|word1 == "couldn't",word3 == "good"| word3 == "great"| word3 == "like"|word3 == "best"|word3 == "greatest"|word3 == "back"|!word3 %in% stop_words$word)
+
+
+yelp_phrase_count_filtered_3 <- yelp_phrase_count_3 %>%
+  filter(n > 20) %>%
+  unite(three_words,word1,word2,word3,sep = " ")
+
+```
+
+
+
+
+##Word Clouds
+
+```{r}
+library(wordcloud2)
+ordered_words <- sentiment_words %>%
+  arrange(desc(n))
+color <- c(0,rep(nrow(ordered_words)))
+color[ordered_words$sentiment == "positive"] = "blue"
+color[ordered_words$sentiment == "negative"] = "red"
+wordcloud2(data = ordered_words, color = color)
+
+ordered_phrase <- yelp_phrase_count_filtered %>%
+  separate(two_words,c("word1","word"), sep = " ") %>%
+  inner_join(sentiments) %>%
+  unite(two_words,word1,word,sep = " ")
+  
+
+color2 <- c(rep("black",nrow(ordered_phrase)))
+
+color2 <- ifelse(ordered_phrase$sentiment == "positive","red","blue")
+
+wordcloud2(data = ordered_phrase, color = color2)
+
+wordcloud2(data = yelp_phrase_count_filtered_3)
+
+
+```
+
+
+
+
+
+##Testing Word Associations with Star Rating
+
+```{r}
+words <- c(sentiment_words$word,yelp_phrase_count_filtered$two_words,yelp_phrase_count_filtered_3$three_words) ##words that are not in model
+new_X <- matrix(0, nrow(yelp), length(words))
+new_x_out <- matrix(0,nrow(yelp_out),length(words))
+# testing if a specific word count is associated with star rating
+new_pvals <- rep(0,length(words))
+names(new_pvals) <- words
+for (i in 1:length(words)){
+  new_X[,i] <- str_count(yelp$text, regex(words[i], ignore_case=T))
+  new_x_out[,i] <- str_count(yelp_out$text, regex(words[i], ignore_case=T))# ignore the upper/lower case in the text
+}
+
+# testing if a specific word count is associated with star rating
+new_pvals <- rep(0,length(words))
+names(new_pvals) <- words
+
+set.seed(123)
+
+for (i in 1:length(words)){
+  ctable <- table(yelp$stars, new_X[,i])
+  new_pvals[i] <- fisher.test(ctable, simulate.p.value = T)$p.value
+}
+
+
+
+colnames(new_X) = names(new_pvals)
+colnames(new_x_out) = names(new_pvals)
+
+sigwords <- names(new_pvals[new_pvals < .05])
+sigindex <- which(new_pvals < .05, arr.ind = TRUE) ##filtering out insignificant p-values
+
+colnames(yelp_out)[6] = "cool1"
+colnames(yelp)[7] = "cool1"
+
+colnames(yelp_out)[4] = "useful1"
+colnames(yelp)[5] = "useful1"
+
+yelp_words <- cbind(yelp,new_X[,sigindex])
+yelp_out_words <- cbind(yelp_out,new_x_out[,sigindex])##new dataframe with additional predictors
+
+addwords <- function(x,y){
+for (i in y){ ##adding words to model
+  x[[i]] <- str_count(tolower(x$text),i)
+}
+  return(x)
+}
+
+
+yelp2 <- yelp_words
+
+yelp_out2 <- yelp_out_words
+
+word.yelp <- colnames(yelp_words)[c(13:212,468:1592)]
+
+word.yelpout <- colnames(yelp_out_words)[c(12:211,467:1591)]
+
+
+for (i in word.yelp){ ##converting all words into categorical variables TRUE if word appears, false if not
+  yelp2[[i]] <- yelp2[[i]] > 0
+}
+
+for(i in word.yelpout){
+  yelp_out2[[i]] <- yelp_out2[[i]] > 0
+}
+
+
+
+```
+
+
+```{r}
+plotWordStar <- function(stars, wordcount, wordname){
+  meancount <- rep(0,5)
+  names(meancount) <- 1:5
+  for (i in 1:5)    meancount[i] <- mean(wordcount[stars==i])
+  barplot(meancount, main=wordname, xlab="Stars", ylab="Average word count")
+}
+
+
+graphwords <- sentiment_words %>%
+       arrange(desc(n)) %>%
+       head(n = 4)
+
+graphwords <- c(graphwords, yelp_phrase_count_filtered %>%
+                  arrange(desc(n)) %>%
+                  head(n = 4))
+
+graphwords <- c(graphwords,yelp_phrase_count_filtered_3 %>%
+              arrange(desc(n)) %>%
+              head(n = 4) %>%
+              select(three_words))
+words2 <- c(graphwords$word,graphwords$two_words,graphwords$three_words)
+
+par(mfrow=c(3,4))
+for (i in 1:12){
+  plotWordStar(yelp$stars,new_X[,words2[i]], words2[i])
+}
+
+```
+
+
+##Initial Model
+
+```{r}
+dat <- yelp2[,-c(1,3:4,8,12)]      
+dat$nword <- log(dat$nword)
+dat$nchar <- log(dat$nchar)
+benchmark <- lm(stars~., data=dat)
+summary(benchmark)
+mean(benchmark$residuals^2) ##MSE
+sqrt(mean(benchmark$residuals^2)) ##RMSE
+yelp_out2$nchar <- log(yelp_out$nchar)
+yelp_out2$nword <- log(yelp_out$nword)
+predicted <- predict(benchmark, newdata = yelp_out2)
+for(i in 1:length(predicted)){ ##Forces prediction between 1-5 stars
+  if(predicted[i] > 5){
+    predicted[i] = 5
+  }
+  if(predicted[i] < 1) {
+    predicted[i] = 1
+  }
+}
+star_out <- data.frame(Id=yelp_out2$Id, Expected=predicted)
+write.csv(star_out, file='Prithvi_submission39.csv', row.names=FALSE)
+```
+
+
+##Diagnostics
+
+```{r}
+par(mfrow = c(2,3))
+plot(benchmark,which = 1)
+plot(benchmark,which = 2)
+plot(benchmark,which = 3)
+plot(benchmark,which = 4)
+plot(benchmark,which = 5)
+```
+
+##Inference
+
+$H_0: \beta_j = 0 for all one word predictors added to model, H_a: \beta_j \neq 0 for all one word predictors added to model$
+
+```{r}
+library(knitr)
+rm_1 <- lm(stars~., data = dat[,-c(1263:1494)])
+test1 <- anova(rm_1,benchmark)
+kable(test1, format = "pandoc")
+rm_2 <- lm(stars ~ ., data = dat[,-c(1495:1587)])
+test2 <- anova(rm_2,benchmark)
+kable(test2, format = "pandoc")
+```
+
+
+
+
